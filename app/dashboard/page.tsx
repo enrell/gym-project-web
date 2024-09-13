@@ -3,9 +3,21 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSession, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import Header from "../components/Header";
 import CreateGymModal from "../components/CreateGymModal";
 import EditGymModal from "../components/EditGymModal";
 import TurnstileManagement from "../components/TurnstileManagement";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { PlusCircle, Edit, Trash2, ChevronDown, ChevronUp, MapPin } from "lucide-react";
+import { Input } from "@/components/ui/input"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Spinner } from "@/app/components/ui/spinner"
+import dynamic from 'next/dynamic'
+
+const MapView = dynamic(() => import('../components/MapView'), { ssr: false })
 
 interface Gym {
   id: string;
@@ -14,6 +26,7 @@ interface Gym {
   phone: string;
   latitude: number;
   longitude: number;
+  createdAt: string;
 }
 
 export default function DashboardPage() {
@@ -25,8 +38,12 @@ export default function DashboardPage() {
   const [selectedGym, setSelectedGym] = useState<Gym | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [hasMorePages, setHasMorePages] = useState(true);
+  const [turnstileKey, setTurnstileKey] = useState(0);
   const { data: session, status } = useSession();
   const router = useRouter();
+  const [searchTerm, setSearchTerm] = useState("");
+  const [expandedGymId, setExpandedGymId] = useState<string | null>(null);
+  const [sortOrder, setSortOrder] = useState<'recent' | 'oldest'>('recent');
 
   useEffect(() => {
     if (status === "unauthenticated") {
@@ -42,7 +59,7 @@ export default function DashboardPage() {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/user/gyms?page=${currentPage}`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/user/gyms?page=${currentPage}&sort=${sortOrder}`, {
         headers: {
           'Authorization': `Bearer ${session.accessToken}`
         }
@@ -53,7 +70,11 @@ export default function DashboardPage() {
       }
 
       const data = await response.json();
-      const newGyms = data.gyms;
+      const newGyms = data.gyms.map(gym => ({
+        ...gym,
+        latitude: Number(gym.latitude),
+        longitude: Number(gym.longitude)
+      }));
       
       // Substituir os ginásios existentes em vez de adicionar a eles
       setGyms(newGyms);
@@ -64,7 +85,7 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, [session, currentPage, status]);
+  }, [session, currentPage, status, sortOrder]);
 
   useEffect(() => {
     if (status === "authenticated") {
@@ -120,8 +141,32 @@ export default function DashboardPage() {
     }
   };
 
+  const handleGymCreated = useCallback(() => {
+    setCurrentPage(1);
+    setGyms([]);
+    fetchUserGyms();
+    setTurnstileKey(prevKey => prevKey + 1);
+  }, [fetchUserGyms]);
+
+  const toggleGymExpansion = (gymId: string) => {
+    setExpandedGymId(expandedGymId === gymId ? null : gymId);
+  };
+
+  const filteredGyms = gyms.filter(gym => 
+    gym.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    gym.description.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const sortedGyms = [...filteredGyms].sort((a, b) => {
+    if (sortOrder === 'recent') {
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    } else {
+      return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+    }
+  });
+
   if (status === "loading") {
-    return <p className="text-black">Loading...</p>;
+    return <p className="text-black">Carregando...</p>;
   }
 
   if (status === "unauthenticated") {
@@ -129,94 +174,149 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-100 p-8">
-      <h1 className="text-3xl font-bold mb-4 text-black">Dashboard</h1>
-      <p className="text-black">Welcome, {session?.user?.email}!</p>
-      
-      <button
-        onClick={() => setIsCreateGymModalOpen(true)}
-        className="mt-4 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
-      >
-        Create New Gym
-      </button>
-      
-      <button
-        onClick={handleLogout}
-        className="mt-4 ml-4 px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
-      >
-        Logout
-      </button>
-
-      <div className="mt-8">
-        <h2 className="text-2xl font-bold mb-4 text-black">Your Gyms</h2>
-        {error && <p className="text-red-500 mb-4">{error}</p>}
-        {loading ? (
-          <p className="text-black">Loading gyms...</p>
-        ) : gyms.length > 0 ? (
-          <>
-            <ul className="space-y-4">
-              {gyms.map((gym) => (
-                <li key={gym.id} className="bg-white p-4 rounded shadow">
-                  <h3 className="text-xl font-semibold text-black">{gym.title}</h3>
-                  <p className="text-gray-600">{gym.description}</p>
-                  <p className="text-gray-600">Phone: {gym.phone}</p>
-                  <p className="text-gray-600">Latitude: {gym.latitude}</p>
-                  <p className="text-gray-600">Longitude: {gym.longitude}</p>
-                  <div className="mt-2">
-                    <button
-                      onClick={() => handleEditGym(gym)}
-                      className="mr-2 px-3 py-1 bg-yellow-500 text-white rounded hover:bg-yellow-600"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      onClick={() => handleDeleteGym(gym.id)}
-                      className="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600"
-                    >
-                      Delete
-                    </button>
+    <div className="min-h-screen bg-background">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="border-x border-gray-200 min-h-screen">
+          <Header user={session?.user} />
+          <main className="py-8">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle className="text-2xl font-bold">Suas Academias</CardTitle>
+                <Button onClick={() => setIsCreateGymModalOpen(true)} className="flex items-center">
+                  <PlusCircle className="mr-2 h-4 w-4" />
+                  Criar Nova Academia
+                </Button>
+              </CardHeader>
+              <CardContent>
+                {error && <p className="text-destructive mb-4">{error}</p>}
+                <div className="flex justify-between mb-4">
+                  <Input
+                    placeholder="Pesquisar academias..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-1/2"
+                  />
+                  <Select value={sortOrder} onValueChange={(value: 'recent' | 'oldest') => setSortOrder(value)}>
+                    <SelectTrigger className="w-[180px]">
+                      <SelectValue placeholder="Ordenar por" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="recent">Mais Recentes</SelectItem>
+                      <SelectItem value="oldest">Mais Antigas</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {loading ? (
+                  <div className="flex justify-center items-center h-64">
+                    <Spinner className="h-8 w-8" />
                   </div>
-                </li>
-              ))}
-            </ul>
-            {hasMorePages && (
-              <button
-                onClick={handleLoadMore}
-                className="mt-4 px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
-              >
-                Load More
-              </button>
+                ) : sortedGyms.length > 0 ? (
+                  <div className="space-y-4">
+                    {sortedGyms.map((gym) => (
+                      <Card 
+                        key={gym.id} 
+                        className="mb-4 cursor-pointer transition-all duration-200 hover:shadow-md"
+                        onClick={() => toggleGymExpansion(gym.id)}
+                      >
+                        <CardHeader>
+                          <CardTitle className="flex justify-between items-center">
+                            <span>{gym.title}</span>
+                            <div className="flex items-center space-x-2">
+                              <Button 
+                                variant="outline" 
+                                size="sm" 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleEditGym(gym);
+                                }}
+                              >
+                                <Edit className="h-4 w-4 mr-2" />
+                                Editar
+                              </Button>
+                              <Dialog>
+                                <DialogTrigger asChild>
+                                  <Button 
+                                    variant="destructive" 
+                                    size="sm"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <Trash2 className="h-4 w-4 mr-2" />
+                                    Excluir
+                                  </Button>
+                                </DialogTrigger>
+                                <DialogContent onClick={(e) => e.stopPropagation()}>
+                                  <DialogHeader>
+                                    <DialogTitle>Tem certeza que deseja excluir esta academia?</DialogTitle>
+                                  </DialogHeader>
+                                  <p>Esta ação não pode ser desfeita.</p>
+                                  <div className="flex justify-end space-x-2">
+                                    <Button variant="outline" onClick={() => {}}>Cancelar</Button>
+                                    <Button variant="destructive" onClick={() => handleDeleteGym(gym.id)}>Excluir</Button>
+                                  </div>
+                                </DialogContent>
+                              </Dialog>
+                              {expandedGymId === gym.id ? (
+                                <ChevronUp className="h-4 w-4" />
+                              ) : (
+                                <ChevronDown className="h-4 w-4" />
+                              )}
+                            </div>
+                          </CardTitle>
+                        </CardHeader>
+                        {expandedGymId === gym.id && (
+                          <CardContent onClick={(e) => e.stopPropagation()}>
+                            <p className="text-sm text-muted-foreground mb-2">{gym.description}</p>
+                            <p className="text-sm mb-2"><strong>Telefone:</strong> {gym.phone}</p>
+                            <div className="mb-2">
+                              <strong className="text-sm">Localização:</strong>
+                              <div className="mt-2 h-[300px] rounded-md overflow-hidden">
+                                <MapView latitude={gym.latitude} longitude={gym.longitude} />
+                              </div>
+                            </div>
+                            <div className="mt-4">
+                              <TurnstileManagement gymId={gym.id} />
+                            </div>
+                          </CardContent>
+                        )}
+                      </Card>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-8">
+                    <p className="text-muted-foreground mb-4">Você ainda não tem nenhuma academia.</p>
+                    <Button onClick={() => setIsCreateGymModalOpen(true)}>
+                      <PlusCircle className="mr-2 h-4 w-4" />
+                      Criar Sua Primeira Academia
+                    </Button>
+                  </div>
+                )}
+                {hasMorePages && (
+                  <div className="flex justify-center mt-4">
+                    <Button onClick={handleLoadMore} variant="outline">
+                      Carregar Mais
+                    </Button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <CreateGymModal
+              isOpen={isCreateGymModalOpen}
+              onClose={() => setIsCreateGymModalOpen(false)}
+              onGymCreated={handleGymCreated}
+            />
+
+            {selectedGym && (
+              <EditGymModal
+                isOpen={isEditGymModalOpen}
+                onClose={() => setIsEditGymModalOpen(false)}
+                onGymUpdated={handleGymCreated}
+                gym={selectedGym}
+              />
             )}
-          </>
-        ) : (
-          <p className="text-black">You dont have any gyms yet. Click Create New Gym to add one!</p>
-        )}
+          </main>
+        </div>
       </div>
-
-      <TurnstileManagement />
-
-      <CreateGymModal
-        isOpen={isCreateGymModalOpen}
-        onClose={() => setIsCreateGymModalOpen(false)}
-        onGymCreated={() => {
-          setCurrentPage(1);
-          setGyms([]);
-          fetchUserGyms();
-        }}
-      />
-
-      {selectedGym && (
-        <EditGymModal
-          isOpen={isEditGymModalOpen}
-          onClose={() => setIsEditGymModalOpen(false)}
-          onGymUpdated={() => {
-            setCurrentPage(1);
-            setGyms([]);
-            fetchUserGyms();
-          }}
-          gym={selectedGym}
-        />
-      )}
     </div>
   );
 }

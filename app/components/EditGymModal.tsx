@@ -1,9 +1,19 @@
 'use client'
 
 import { useState, useEffect } from 'react';
-import Modal from './Modal';
-import { NumericFormat, PatternFormat } from 'react-number-format';
 import { useSession } from 'next-auth/react';
+import { PatternFormat } from 'react-number-format';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"
+import { useForm } from "react-hook-form"
+import { zodResolver } from "@hookform/resolvers/zod"
+import * as z from "zod"
+import { Textarea } from "@/components/ui/textarea"
+import { Spinner } from "@/app/components/ui/spinner"
+import dynamic from 'next/dynamic';
+import MapSelector from './MapSelector';
 
 interface Gym {
   id: string;
@@ -21,45 +31,56 @@ interface EditGymModalProps {
   gym: Gym;
 }
 
+const formSchema = z.object({
+  title: z.string().min(1, "Title is required").max(200, "Title must be 200 characters or less"),
+  description: z.string().min(1, "Description is required").max(2000, "Description must be 2000 characters or less"),
+  phone: z.string().refine((value) => {
+    const digitsOnly = value.replace(/\D/g, '');
+    return digitsOnly.length === 11;
+  }, "Phone number must have 11 digits including DDD"),
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+})
+
 export default function EditGymModal({ isOpen, onClose, onGymUpdated, gym }: EditGymModalProps) {
   const { data: session } = useSession();
-  const [title, setTitle] = useState(gym.title);
-  const [description, setDescription] = useState(gym.description);
-  const [phone, setPhone] = useState(gym.phone);
-  const [latitude, setLatitude] = useState(gym.latitude.toString());
-  const [longitude, setLongitude] = useState(gym.longitude.toString());
   const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const form = useForm<z.infer<typeof formSchema>>({
+    resolver: zodResolver(formSchema),
+    defaultValues: {
+      title: gym.title,
+      description: gym.description,
+      phone: gym.phone,
+      latitude: gym.latitude || undefined,
+      longitude: gym.longitude || undefined,
+    },
+  })
 
   useEffect(() => {
-    setTitle(gym.title);
-    setDescription(gym.description);
-    setPhone(gym.phone);
-    setLatitude(gym.latitude.toString());
-    setLongitude(gym.longitude.toString());
-  }, [gym]);
-
-  const validateInputs = () => {
-    if (!title.trim()) return "Title is required";
-    if (title.length > 200) return "Title must be 200 characters or less";
-    if (!description.trim()) return "Description is required";
-    if (description.length > 2000) return "Description must be 2000 characters or less";
-    if (phone.replace(/\D/g, '').length !== 11) return "Phone number must have 11 digits including DDD";
-    if (!latitude || isNaN(Number(latitude)) || Math.abs(Number(latitude)) > 90) return "Valid latitude is required (between -90 and 90)";
-    if (!longitude || isNaN(Number(longitude)) || Math.abs(Number(longitude)) > 180) return "Valid longitude is required (between -180 and 180)";
-    return null;
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-
-    const validationError = validateInputs();
-    if (validationError) {
-      setError(validationError);
-      return;
+    if (isOpen && gym) {
+      form.reset({
+        title: gym.title,
+        description: gym.description,
+        phone: gym.phone,
+        latitude: gym.latitude,
+        longitude: gym.longitude,
+      });
     }
+  }, [isOpen, gym, form]);
 
+  const handleLocationSelect = (lat: number, lng: number) => {
+    form.setValue('latitude', lat, { shouldValidate: true });
+    form.setValue('longitude', lng, { shouldValidate: true });
+  }
+
+  const onSubmit = async (values: z.infer<typeof formSchema>) => {
+    setError('');
+    setIsSubmitting(true);
     try {
+      const phoneDigitsOnly = values.phone.replace(/\D/g, '');
+      
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/gyms/${gym.id}`, {
         method: 'PUT',
         headers: {
@@ -67,11 +88,8 @@ export default function EditGymModal({ isOpen, onClose, onGymUpdated, gym }: Edi
           'Authorization': `Bearer ${session?.accessToken}`
         },
         body: JSON.stringify({
-          title,
-          description,
-          phone: phone.replace(/\D/g, ''),
-          latitude: parseFloat(latitude),
-          longitude: parseFloat(longitude)
+          ...values,
+          phone: phoneDigitsOnly
         })
       });
 
@@ -87,100 +105,119 @@ export default function EditGymModal({ isOpen, onClose, onGymUpdated, gym }: Edi
     } catch (error) {
       console.error('Error updating gym:', error);
       if (error instanceof Error) {
-        if (error.message === 'Unauthorized') {
-          setError('Your session has expired. Please log in again.');
-        } else {
-          setError(`Failed to update gym: ${error.message}`);
-        }
+        setError(`Failed to update gym: ${error.message}`);
       } else {
         setError('An unexpected error occurred. Please try again.');
       }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose}>
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <h2 className="text-2xl font-bold mb-4 text-black">Edit Gym</h2>
-        {error && <p className="text-red-500">{error}</p>}
-        
-        <div>
-          <label htmlFor="title" className="block text-black">Gym Name</label>
-          <input
-            type="text"
-            id="title"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            required
-            maxLength={200}
-            className="w-full px-3 py-2 border rounded text-black"
-          />
-          <p className="text-sm text-gray-500 mt-1">{title.length}/200 characters</p>
-        </div>
+    <Dialog open={isOpen} onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-[525px]">
+        <DialogHeader>
+          <DialogTitle>Editar Academia</DialogTitle>
+        </DialogHeader>
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            {error && <p className="text-destructive">{error}</p>}
+            <FormField
+              control={form.control}
+              name="title"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Nome da Academia</FormLabel>
+                  <FormControl>
+                    <Input {...field} maxLength={200} placeholder="Digite o nome da academia" />
+                  </FormControl>
+                  <FormMessage />
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {field.value.length}/200 caracteres
+                  </p>
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="description"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Descrição</FormLabel>
+                  <FormControl>
+                    <Textarea 
+                      {...field} 
+                      maxLength={2000}
+                      rows={4}
+                      className="resize-none"
+                      placeholder="Descreva as características, serviços e diferenciais da sua academia..."
+                    />
+                  </FormControl>
+                  <FormMessage />
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {field.value.length}/2000 caracteres
+                  </p>
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="phone"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Número de Telefone</FormLabel>
+                  <FormControl>
+                    <PatternFormat
+                      format="(##) #####-####"
+                      mask="_"
+                      customInput={Input}
+                      onValueChange={(values) => {
+                        field.onChange(values.value);
+                      }}
+                      value={field.value}
+                      placeholder="(00) 00000-0000"
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="latitude"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Localização</FormLabel>
+                  <FormControl>
+                    {isOpen && (
+                      <MapSelector
+                        key={isOpen ? 'open' : 'closed'} // Force re-render when modal opens
+                        initialLat={field.value !== undefined ? Number(field.value) : undefined}
+                        initialLng={form.getValues('longitude') !== undefined ? Number(form.getValues('longitude')) : undefined}
+                        onLocationSelect={handleLocationSelect}
+                      />
+                    )}
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
-        <div>
-          <label htmlFor="description" className="block text-black">Description</label>
-          <textarea
-            id="description"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            required
-            maxLength={2000}
-            rows={4}
-            className="w-full px-3 py-2 border rounded text-black"
-          />
-          <p className="text-sm text-gray-500 mt-1">{description.length}/2000 characters</p>
-        </div>
+            {/* Hidden fields for latitude and longitude */}
+            <input type="hidden" {...form.register('latitude', { valueAsNumber: true })} />
+            <input type="hidden" {...form.register('longitude', { valueAsNumber: true })} />
 
-        <div>
-          <label htmlFor="phone" className="block text-black">Phone Number</label>
-          <PatternFormat
-            format="(##) #####-####"
-            mask="_"
-            id="phone"
-            value={phone}
-            onValueChange={(values) => setPhone(values.value)}
-            required
-            className="w-full px-3 py-2 border rounded text-black"
-          />
-        </div>
-
-        <div>
-          <label htmlFor="latitude" className="block text-black">Latitude</label>
-          <NumericFormat
-            id="latitude"
-            value={latitude}
-            onValueChange={(values) => setLatitude(values.value)}
-            decimalScale={6}
-            allowNegative
-            isAllowed={(values) => {
-              const { floatValue } = values;
-              return floatValue === undefined || Math.abs(floatValue) <= 90;
-            }}
-            className="w-full px-3 py-2 border rounded text-black"
-          />
-        </div>
-
-        <div>
-          <label htmlFor="longitude" className="block text-black">Longitude</label>
-          <NumericFormat
-            id="longitude"
-            value={longitude}
-            onValueChange={(values) => setLongitude(values.value)}
-            decimalScale={6}
-            allowNegative
-            isAllowed={(values) => {
-              const { floatValue } = values;
-              return floatValue === undefined || Math.abs(floatValue) <= 180;
-            }}
-            className="w-full px-3 py-2 border rounded text-black"
-          />
-        </div>
-
-        <button type="submit" className="w-full px-4 py-2 text-white bg-blue-500 rounded hover:bg-blue-600">
-          Update Gym
-        </button>
-      </form>
-    </Modal>
+            <div className="flex justify-end space-x-2 mt-6">
+              <Button type="button" variant="outline" onClick={onClose} disabled={isSubmitting}>Cancelar</Button>
+              <Button type="submit" disabled={isSubmitting}>
+                {isSubmitting ? <Spinner className="mr-2" /> : null}
+                {isSubmitting ? "Atualizando..." : "Atualizar Academia"}
+              </Button>
+            </div>
+          </form>
+        </Form>
+      </DialogContent>
+    </Dialog>
   );
 }
