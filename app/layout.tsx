@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import AuthProvider from "./components/AuthProvider";
+import 'leaflet/dist/leaflet.css';
 
 export const metadata: Metadata = {
   title: "Your App Name",
