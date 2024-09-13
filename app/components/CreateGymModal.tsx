@@ -1,9 +1,21 @@
 'use client'
 
 import { useState } from 'react';
-import Modal from './Modal';
-import { NumericFormat, PatternFormat } from 'react-number-format';
 import { useSession } from 'next-auth/react';
+import { PatternFormat } from 'react-number-format';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"
+import { useForm } from "react-hook-form"
+import { zodResolver } from "@hookform/resolvers/zod"
+import * as z from "zod"
+import { Textarea } from "@/components/ui/textarea"
+import { Spinner } from "@/app/components/ui/spinner"
+import dynamic from 'next/dynamic';
+import { useEffect } from 'react';
+
+const MapSelector = dynamic(() => import('./MapSelector'), { ssr: false })
 
 interface CreateGymModalProps {
   isOpen: boolean;
@@ -11,38 +23,51 @@ interface CreateGymModalProps {
   onGymCreated: () => void;
 }
 
+const formSchema = z.object({
+  title: z.string().min(1, "Title is required").max(200, "Title must be 200 characters or less"),
+  description: z.string().min(1, "Description is required").max(2000, "Description must be 2000 characters or less"),
+  phone: z.string().refine((value) => {
+    const digitsOnly = value.replace(/\D/g, '');
+    return digitsOnly.length === 11;
+  }, "Phone number must have 11 digits including DDD"),
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+})
+
 export default function CreateGymModal({ isOpen, onClose, onGymCreated }: CreateGymModalProps) {
   const { data: session } = useSession();
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [phone, setPhone] = useState('');
-  const [latitude, setLatitude] = useState('');
-  const [longitude, setLongitude] = useState('');
   const [error, setError] = useState('');
-  const [step, setStep] = useState(1);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const validateInputs = () => {
-    if (!title.trim()) return "Title is required";
-    if (title.length > 200) return "Title must be 200 characters or less";
-    if (!description.trim()) return "Description is required";
-    if (description.length > 2000) return "Description must be 2000 characters or less";
-    if (phone.replace(/\D/g, '').length !== 11) return "Phone number must have 11 digits including DDD";
-    if (!latitude || isNaN(Number(latitude)) || Math.abs(Number(latitude)) > 90) return "Valid latitude is required (between -90 and 90)";
-    if (!longitude || isNaN(Number(longitude)) || Math.abs(Number(longitude)) > 180) return "Valid longitude is required (between -180 and 180)";
-    return null;
-  };
+  const form = useForm<z.infer<typeof formSchema>>({
+    resolver: zodResolver(formSchema),
+    defaultValues: {
+      title: "",
+      description: "",
+      phone: "",
+      latitude: undefined,
+      longitude: undefined,
+    },
+  })
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-
-    const validationError = validateInputs();
-    if (validationError) {
-      setError(validationError);
-      return;
+  useEffect(() => {
+    if (!isOpen) {
+      form.reset();
     }
+  }, [isOpen, form]);
 
+  const handleLocationSelect = (lat: number, lng: number) => {
+    form.setValue('latitude', lat, { shouldValidate: true });
+    form.setValue('longitude', lng, { shouldValidate: true });
+  }
+
+  const onSubmit = async (values: z.infer<typeof formSchema>) => {
+    setError('');
+    setIsSubmitting(true);
     try {
+      // Remove non-digit characters from phone before sending to API
+      const phoneDigitsOnly = values.phone.replace(/\D/g, '');
+      
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/gyms`, {
         method: 'POST',
         headers: {
@@ -50,12 +75,9 @@ export default function CreateGymModal({ isOpen, onClose, onGymCreated }: Create
           'Authorization': `Bearer ${session?.accessToken}`
         },
         body: JSON.stringify({
-          title,
-          description,
-          phone: phone.replace(/\D/g, ''),
-          latitude: parseFloat(latitude),
-          longitude: parseFloat(longitude)
-        }),
+          ...values,
+          phone: phoneDigitsOnly
+        })
       });
 
       if (!response.ok) {
@@ -70,138 +92,118 @@ export default function CreateGymModal({ isOpen, onClose, onGymCreated }: Create
     } catch (error) {
       console.error('Error creating gym:', error);
       if (error instanceof Error) {
-        if (error.message === 'Unauthorized') {
-          setError('Your session has expired. Please log in again.');
-          // Aqui você pode adicionar lógica para redirecionar o usuário para a página de login
-        } else {
-          setError(`Failed to create gym: ${error.message}`);
-        }
+        setError(`Failed to create gym: ${error.message}`);
       } else {
         setError('An unexpected error occurred. Please try again.');
       }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  const nextStep = () => {
-    if (step < 3) setStep(step + 1);
-  };
-
-  const prevStep = () => {
-    if (step > 1) setStep(step - 1);
-  };
-
   return (
-    <Modal isOpen={isOpen} onClose={onClose}>
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <h2 className="text-2xl font-bold mb-4 text-black">Create New Gym</h2>
-        {error && <p className="text-red-500">{error}</p>}
-        
-        {step === 1 && (
-          <>
-            <div>
-              <label htmlFor="title" className="block text-black">Gym Name</label>
-              <input
-                type="text"
-                id="title"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                required
-                maxLength={200}
-                className="w-full px-3 py-2 border rounded text-black"
-                placeholder="e.g., Fitness Plus"
-              />
-              <p className="text-sm text-gray-500 mt-1">{title.length}/200 characters</p>
-            </div>
-            <div>
-              <label htmlFor="description" className="block text-black">Description</label>
-              <textarea
-                id="description"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                required
-                maxLength={2000}
-                rows={4}
-                className="w-full px-3 py-2 border rounded text-black"
-                placeholder="Describe your gym's features and services"
-              />
-              <p className="text-sm text-gray-500 mt-1">{description.length}/2000 characters</p>
-            </div>
-          </>
-        )}
-
-        {step === 2 && (
-          <div>
-            <label htmlFor="phone" className="block text-black">Phone Number</label>
-            <PatternFormat
-              format="(##) #####-####"
-              mask="_"
-              id="phone"
-              value={phone}
-              onValueChange={(values) => setPhone(values.value)}
-              required
-              className="w-full px-3 py-2 border rounded text-black"
-              placeholder="(00) 00000-0000"
+    <Dialog open={isOpen} onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-[525px]">
+        <DialogHeader>
+          <DialogTitle>Criar Nova Academia</DialogTitle>
+        </DialogHeader>
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            {error && <p className="text-destructive">{error}</p>}
+            <FormField
+              control={form.control}
+              name="title"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Nome da Academia</FormLabel>
+                  <FormControl>
+                    <Input {...field} maxLength={200} placeholder="Digite o nome da academia" />
+                  </FormControl>
+                  <FormMessage />
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {field.value.length}/200 caracteres
+                  </p>
+                </FormItem>
+              )}
             />
-            <p className="text-sm text-gray-500 mt-1">Enter a valid contact number including DDD</p>
-          </div>
-        )}
+            <FormField
+              control={form.control}
+              name="description"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Descrição</FormLabel>
+                  <FormControl>
+                    <Textarea 
+                      {...field} 
+                      maxLength={2000}
+                      rows={4}
+                      className="resize-none"
+                      placeholder="Descreva as características, serviços e diferenciais da sua academia..."
+                    />
+                  </FormControl>
+                  <FormMessage />
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {field.value.length}/2000 caracteres
+                  </p>
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="phone"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Número de Telefone</FormLabel>
+                  <FormControl>
+                    <PatternFormat
+                      format="(##) #####-####"
+                      mask="_"
+                      customInput={Input}
+                      onValueChange={(values) => {
+                        field.onChange(values.value);
+                      }}
+                      value={field.value}
+                      placeholder="(00) 00000-0000"
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="latitude"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Localização</FormLabel>
+                  <FormControl>
+                    {isOpen && (
+                      <MapSelector
+                        initialLat={field.value}
+                        initialLng={form.getValues('longitude')}
+                        onLocationSelect={handleLocationSelect}
+                      />
+                    )}
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
-        {step === 3 && (
-          <>
-            <div>
-              <label htmlFor="latitude" className="block text-black">Latitude</label>
-              <NumericFormat
-                id="latitude"
-                value={latitude}
-                onValueChange={(values) => setLatitude(values.value)}
-                decimalScale={6}
-                allowNegative
-                isAllowed={(values) => {
-                  const { floatValue } = values;
-                  return floatValue === undefined || Math.abs(floatValue) <= 90;
-                }}
-                className="w-full px-3 py-2 border rounded text-black"
-                placeholder="-90.000000 to 90.000000"
-              />
-              <p className="text-sm text-gray-500 mt-1">Enter a valid latitude between -90 and 90 degrees</p>
-            </div>
-            <div>
-              <label htmlFor="longitude" className="block text-black">Longitude</label>
-              <NumericFormat
-                id="longitude"
-                value={longitude}
-                onValueChange={(values) => setLongitude(values.value)}
-                decimalScale={6}
-                allowNegative
-                isAllowed={(values) => {
-                  const { floatValue } = values;
-                  return floatValue === undefined || Math.abs(floatValue) <= 180;
-                }}
-                className="w-full px-3 py-2 border rounded text-black"
-                placeholder="-180.000000 to 180.000000"
-              />
-              <p className="text-sm text-gray-500 mt-1">Enter a valid longitude between -180 and 180 degrees</p>
-            </div>
-          </>
-        )}
+            {/* Hidden fields for latitude and longitude */}
+            <input type="hidden" {...form.register('latitude', { valueAsNumber: true })} />
+            <input type="hidden" {...form.register('longitude', { valueAsNumber: true })} />
 
-        <div className="flex justify-between mt-6">
-          {step > 1 && (
-            <button type="button" onClick={prevStep} className="px-4 py-2 text-gray-600 bg-gray-200 rounded hover:bg-gray-300">
-              Previous
-            </button>
-          )}
-          {step < 3 ? (
-            <button type="button" onClick={nextStep} className="px-4 py-2 text-white bg-blue-500 rounded hover:bg-blue-600">
-              Next
-            </button>
-          ) : (
-            <button type="submit" className="px-4 py-2 text-white bg-green-500 rounded hover:bg-green-600">
-              Create Gym
-            </button>
-          )}
-        </div>
-      </form>
-    </Modal>
+            <div className="flex justify-end space-x-2 mt-6">
+              <Button type="button" variant="outline" onClick={onClose} disabled={isSubmitting}>Cancelar</Button>
+              <Button type="submit" disabled={isSubmitting}>
+                {isSubmitting ? <Spinner className="mr-2" /> : null}
+                {isSubmitting ? "Criando..." : "Criar Academia"}
+              </Button>
+            </div>
+          </form>
+        </Form>
+      </DialogContent>
+    </Dialog>
   );
 }
